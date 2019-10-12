@@ -6,8 +6,31 @@ cc_counts <- read_csv("https://opendata.arcgis.com/datasets/367cb53685c74628b497
 sw_counts <- read_csv("https://opendata.arcgis.com/datasets/8860784eb30e4a45a6f853b5f81949f2_0.csv", col_types = "ci-") %>% mutate(location = "SW Path at Randall")
 #combine two counter locations
 counts <- bind_rows(cc_counts, sw_counts)
-#fix date column
-counts <- counts %>% mutate(Count_Date = mdy_hm(str_sub(Count_Date, 6)))
+#fix date column, drop NA
+counts <- counts %>% mutate(Count_Date = mdy_hm(str_sub(Count_Date, 6))) %>% drop_na
 
-counts %>% ggplot(aes(Count_Date, Count, color = location)) +
-  geom_point(alpha = 0.7)
+#count number by weekday and location
+counts %>%
+  mutate(day = wday(Count_Date, label = TRUE)) %>%
+  group_by(location, day) %>%
+  summarize(sum = sum(Count)) %>%
+  ggplot(aes(day, sum, fill = location)) +
+  geom_col(position = "dodge")
+
+#count number by hour of day and location
+counts %>%
+  filter(wday(Count_Date) %in% c(2:6)) %>% #filter to weekdays only
+  mutate(hour = hour(Count_Date)) %>%
+  group_by(location, hour) %>%
+  summarize(sum = sum(Count)) %>%
+  ggplot(aes(hour, sum, fill = location)) +
+  geom_col(position = "dodge")
+
+#count number by year and location
+#to do: either filter for only complete years or make it a riders/day metric
+counts %>%
+  mutate(year = year(Count_Date), day = day(Count_Date)) %>%
+  group_by(location, year, day) %>%
+  summarise(sum = n()) %>%
+  ggplot(aes(year, sum, fill = location)) +
+  geom_col(position = "dodge")
