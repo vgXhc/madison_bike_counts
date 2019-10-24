@@ -37,3 +37,4 @@ rsconnect/
 
 #html preview files
 *.html
+.Rproj.user

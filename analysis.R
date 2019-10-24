@@ -23,6 +23,26 @@ get_weather <- function(year, data_type) {
   df$data
 }
 
+tmp2 <- ncdc_datatypes(stationid = "72641014837", limit = 1000)
+view(tmp2$data)
+tmp <- ghcnd_stations(locationid='FIPS:55025', datatypeid = "", limit = 1000)
+view(tmp$data)
+isd_stations(refresh = TRUE)
+isd_stations_search(lat = 43.066667, lon = -89.400000, radius = 10)
+res <- isd(usaf="726410", wban="14837", year=2018)
+
+res %>% select(starts_with("AI"))
+
+colnames(res)
+
+
+df <- ncdc(datasetid='GHCND', 
+           stationid='GHCND:USW00014837',
+           startdate = "2018-01-01", 
+           enddate = "2018-01-06", 
+           add_units = TRUE, 
+           limit = 1000)
+
 # list of years and data types
 combo <- list(year = c(2014:2019), id = c("PRCP", "SNOW", "SNWD", "TMAX", "TMIN", "TOBS"))
 #create list of all possible combinations; transpose so that map2 can digest it
