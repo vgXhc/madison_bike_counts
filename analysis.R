@@ -29,11 +29,23 @@ tmp <- ghcnd_stations(locationid='FIPS:55025', datatypeid = "", limit = 1000)
 view(tmp$data)
 isd_stations(refresh = TRUE)
 isd_stations_search(lat = 43.066667, lon = -89.400000, radius = 10)
+
+
+# get data for Madison airport station. Data dictionary: ftp://ftp.ncdc.noaa.gov/pub/data/noaa/isd-format-document.pdf
 res <- isd(usaf="726410", wban="14837", year=2018)
 
-res %>% select(starts_with("AI"))
+# filter rows with missing air temperature
+# create new date/time variable
+# fix temperature units to degree Celsius
+# round time to nearest hours
+res <- res %>% 
+  filter(temperature != "+9999") %>% 
+  mutate(date_time = paste(date, time, sep = " ")) %>% 
+  mutate(date_time = round_date(ymd_hm(date_time, tz = "UTC"), "hour")) %>%
+  mutate(temperature = as.double(temperature) / 10) %>%
+  select(date_time, temperature)
 
-colnames(res)
+
 
 
 df <- ncdc(datasetid='GHCND', 
@@ -62,7 +74,15 @@ sw_counts <- read_csv("https://opendata.arcgis.com/datasets/8860784eb30e4a45a6f8
 #combine two counter locations
 counts <- bind_rows(cc_counts, sw_counts)
 #fix date column, drop NA
-counts <- counts %>% mutate(Count_Date = mdy_hm(str_sub(Count_Date, 6))) %>% drop_na
+counts <- counts %>% mutate(Count_Date = mdy_hm(str_sub(Count_Date, 6), tz = "US/Central")) %>% drop_na
+
+df <- counts %>% inner_join(res, by = c("Count_Date" = "date_time"))
+
+lm(Count ~ temperature, df)
+
+qplot(y = Count, x = temperature, data = df, geom = "point")
+
+round_date(res$date_time, "hour")
 
 #count number by weekday and location
 counts %>%
