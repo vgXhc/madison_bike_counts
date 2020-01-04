@@ -1,0 +1,141 @@
+---
+title: "Bike counts, temperature, and precipitation in Madison (Wis.)"
+author: "Harald Kliems"
+date: "1/1/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+My home town, Madison (Wis.), has automated bike counters on two of the city's busiest bike paths, the Southwest Path and the Capital City Trail. The data is being made available with hourly counts on Madison's Open Data portal. In this post I will combine this data with climate data to investigate the relationship between bike counts, temperature, and precipitation.
+
+## Preparations
+I will heavily rely on `tidyverse` packages, including `lubridate` and `purr`. Other packages include the `rnoaa` package for the climate data and `timeDate` for dealing with holidays.
+
+```{r message = FALSE}
+library(tidyverse)
+library(purrr)
+library(lubridate)
+library(rnoaa)
+library(timeDate)
+```
+
+## Getting the bike count data
+CSV files for each counter can be downloaded right from the portal. The files contain three columns, one of them a meaningless object id, which I will skip in the import. I'll add a variable of the location of the counter and then combine the two: 
+```{r} 
+cc_counts <- read_csv("https://opendata.arcgis.com/datasets/367cb53685c74628b4975d8f65d20748_0.csv", col_types = "ci-") %>% mutate(location = "Cap City at North Shore")
+
+sw_counts <- read_csv("https://opendata.arcgis.com/datasets/8860784eb30e4a45a6f853b5f81949f2_0.csv", col_types = "ci-") %>% mutate(location = "SW Path at Randall")
+
+counts <- bind_rows(cc_counts, sw_counts)
+```
+A quick data check shows that the data is relatively tidy.
+
+```{r}
+summary(counts)
+```
+
+There are a few `NA` values in the counts. I first thought they may be a random malfunction, let's take a look at when and where these occur:
+```{r}
+x <- which(is.na(counts$Count))
+counts[x,]
+```
+Notice anything about the dates? It's the switch to daylight savings time (DST)! There's no count for 2 am on those days because there is no 2 am. The fifth row is the only that doesn't quite fit this, but it must also be DST related. Conclusion: It's fine to just drop these NAs.
+
+The next step is to convert the date and time variable, which currently is stored as a character. I'll use `lubridate` to fix this. I'm also specifying the time zone and adding an `dayofweek` and a weekend/weekday indicator variable, which will come in handy later.
+```{r}
+counts2 <- counts %>% 
+  drop_na %>% 
+  mutate(Count_Date = mdy_hm(str_sub(Count_Date, 6), tz = "US/Central")) %>% 
+  mutate(dayofweek = wday(Count_Date, label = TRUE)) %>% 
+  mutate(weekendind = ifelse(dayofweek %in% c("Sat", "Sun"), "weekend", "weekday"))
+```
+
+Nex some additional quality checks on the count numbers.
+
+```{r}
+counts2 %>%
+  ggplot(aes(Count)) +
+  geom_histogram() +
+  facet_wrap(~location)
+```
+Both histograms look plausible on the left side, but they seem to have a very long right tail. Better to investigate further with a boxplot.
+```{r}
+counts2 %>% 
+  ggplot(aes(location, Count)) +
+  geom_boxplot()
+```
+Some of the outliers on the top look a little suspicious and warrant further investigation. It's not impossible to have 1000 cyclists in one hour (or 17 per minute), but these counts seem very high. So let's look at hourly counts above 500 more closely.
+
+```{r}
+counts2 %>% 
+  filter(Count > 500) %>% 
+  arrange(location, desc(Count))
+```
+
+The Cap City numbers all look plausible: All but one are on summer Saturdays around noon, and the one exception is a Sunday. As we'll see below, Saturdays are the busiest days at that location. 
+
+The SW Path counts look more suspicious. The top four counts happened on July 2 and 3, 2018, a Monday and Tuesday, both times in the evening. This is right before the July 4 holiday, which may explain slightly higher evening numbers, with people taking Monday and Tuesday off. But the numbers are so high that this seems implausible. Also note the next highest counts here also all happened in the summer of 2018. I quickly checked a local newspapers events calendar for July 3, and none of the events listed would explain the spike in numbers. Let's plot hourly count for the suspicious days
+
+```{r}
+counts2 %>% 
+  filter(Count_Date >= ymd("2018-07-02") & Count_Date <= ymd("2018-07-04") & location == "SW Path at Randall") %>% 
+  ggplot(aes(Count_Date, Count)) +
+  geom_col()
+```
+I'm fairly confident that we're seeing a sensor malfunction here. On July 2, there's a first spike at 2pm, then a big drop from 6 to 7 pm, and then counts go from less than 50 to almost 900 and back down below 50 again within 2 hours. July 3 has an overall larger peak, but here too the hour-to-hour changes seem implausible. 
+
+Next, I'll do some exploratory plots. Because the counters were installed at different times, I'm filtering the data to only include complete years.
+
+### Counts per year
+```{r}
+counts2 %>%
+  filter(year(Count_Date) %in% c(2015:2018)) %>% 
+  filter(location != "Cap City at North Shore" | year(Count_Date) != 2015) %>% 
+  group_by(location, year(Count_Date)) %>%
+  summarize(sum = sum(Count)) %>%
+  ggplot(aes(x = `year(Count_Date)`, sum, fill = location)) +
+  geom_col(position = "dodge")
+```
+
+```{r}
+#count totals by weekday and location
+counts2 %>%
+  group_by(location, dayofweek) %>%
+  summarize(sum = sum(Count)) %>%
+  ggplot(aes(dayofweek, sum, fill = location)) +
+  geom_col(position = "dodge")
+```
+You can clearly see that there are differences between different days of the week, and the pattern looks different for the two locations. For the SW Path, numbers are higher during the work week, whereas the busiest days on the Cap City are Saturdays.
+
+```{r}
+#count number by hour of day and location
+counts2 %>%
+  mutate(hour = hour(Count_Date)) %>%
+  group_by(location, hour) %>%
+  summarize(sum = sum(Count)) %>%
+  ggplot(aes(hour, sum, fill = location)) +
+  geom_col(position = "dodge")
+```
+
+Looking at the data at the hourly level, the pattern looks like what you would expect: Two peaks during the morning and afternoon commute, then a gradual dropoff during the evening, with almost no traffic between 11 pm and 6 am. The two locations appear very similar.
+
+A reasonable assumption would be that the hourly pattern is different on the weekend, as the traffic will have fewer people riding to and from work.
+
+```{r}
+counts2 %>%
+  mutate(hour = hour(Count_Date)) %>%
+  group_by(location, hour, weekendind) %>%
+  summarize(sum = sum(Count)) %>%
+  ggplot(aes(hour, sum, fill = location)) +
+  geom_col(position = "dodge") +
+  facet_wrap(~ weekendind)
+```
+Indeed, the morning peak disappears and the afternoon peak is less pronounced on the weekend. The dropoff in the evening is also shallower on the weekend. Overall, there is much less traffic on the weekend compared to a weekday.
+
+
+
