@@ -2,6 +2,9 @@ library(tidyverse)
 library(purrr)
 library(lubridate)
 library(rnoaa)
+library(timeDate) #needed for dealing with holidays
+
+
 
 #weather station ID for CHARMANY FARM, WI station on Mineral Pt Rd
 id <- "GHCND:USC00471416"
@@ -34,7 +37,9 @@ isd_stations_search(lat = 43.066667, lon = -89.400000, radius = 10)
 
 
 
-# get data for Madison airport station. Data dictionary: ftp://ftp.ncdc.noaa.gov/pub/data/noaa/isd-format-document.pdf
+## get climate data for Madison airport station 
+# Data dictionary: ftp://ftp.ncdc.noaa.gov/pub/data/noaa/isd-format-document.pdf
+# Helpful document for understanding the data structure: https://www.visualcrossing.com/blog/how-we-process-integrated-surface-database-historical-weather-data
 ## set up year vector
 x <- c(2014:2019)
 ## define function to get data
@@ -82,15 +87,104 @@ sw_counts <- read_csv("https://opendata.arcgis.com/datasets/8860784eb30e4a45a6f8
 counts <- bind_rows(cc_counts, sw_counts)
 #some data prep for counts
 counts2 <- counts %>% 
-  mutate(Count_Date = mdy_hm(str_sub(Count_Date, 6), tz = "US/Central")) %>% #fix date and time
   drop_na %>% 
-  mutate(Count = ifelse(Count == 0, 1, Count)) %>% #convert 0 counts to 1 to allow log transform
-  mutate(log_count = log(Count)) %>% #create value for log of count
-  mutate(dayofweek = wday(Count_Date)) %>% 
-  mutate(weekendind = ifelse(dayofweek %in% c(1:5), "weekday", "weekend"))
+  mutate(Count_Date = mdy_hm(Count_Date, tz = "US/Central"), #fix date and time
+         location = as.factor(location),
+         Count = ifelse(Count == 0, 1, Count), #convert 0 counts to 1 to allow log transform
+         log_count = log(Count), #create value for log of count
+         dayofweek = wday(Count_Date),
+         weekendind = ifelse(dayofweek %in% c(1:5), "weekday", "weekend"))
+
+counts2 %>% 
+  filter(Count_Date >= ymd("2018-06-15") & Count_Date <= ymd("2018-07-05")) %>% 
+  ggplot(aes(Count_Date, Count)) +
+  geom_line()
 
 
+counts2 %>% 
+  filter(Count_Date >= ymd("2018-07-02") & Count_Date <= ymd("2018-07-04") & location == "SW Path at Randall") %>% 
+  ggplot(aes(Count_Date, Count)) +
+  geom_col()
+
+# check for consecutive identical non-zero values
+dupes <- rle(counts2$Count)
+head(dupes)
+
+tibble(length = dupes$lengths, values = dupes$values) %>% 
+  #filter(values != 1 & length >1) %>% 
+  arrange(desc(length)) %>%
+  group_by(values) %>%
+  ggplot(aes(length, values)) +
+  geom_point(alpha = 0.2)
+
+counts2 %>% 
+  filter(Count_Date >= ymd("2018-07-02") & Count_Date <= ymd("2018-07-04")) %>% 
+  group_by(location) %>% 
+ggplot(aes(Count_Date, Count, fill = location)) +
+  geom_col(position = "dodge")
+
+# IQR moving average
+thresholds <- counts2 %>%
+  filter(location == "SW Path at Randall" & Count_Date >= ymd("2018-07-02") - days(27) & Count_Date <= ymd("2018-07-02")) %>% 
+  group_by(hour(Count_Date)) %>% 
+  summarize(hourly_IQR = IQR(Count),
+            q3 = quantile(Count, 3/4),
+            q1 = quantile(Count, 1/4)) %>% 
+  mutate(upper_thresh = q3 + 2* hourly_IQR, #establishing the upper threshold
+         lower_thresh = q1 - 2* hourly_IQR)  #and the lower threshold (which can be negative)
+
+counts_ts <- counts2 %>% 
+  select(Count_Date, Count) %>% 
+as.ts() %>% 
+  stl(t.window=13, s.window="periodic", robust=TRUE) %>%
+  autoplot()
+as.ts(counts2) %>%
+  stl(t.window=13, s.window="periodic", robust=TRUE) %>%
+  autoplot()
+
+library(imputeTS)
+counts_ts <- counts2 %>% 
+  filter(location == "SW Path at Randall") %>% 
+  mutate(Count = ifelse(Count > 500, NA, Count)) %>% 
+  select(Count_Date, Count) %>% 
+  as.ts()
+
+high <- counts2 %>% 
+  filter(location == "SW Path at Randall")
+
+high <-  which(high$Count > 500)
+counts_ts_int <- na.interpolation(counts_ts, option = "linear")
+counts_ts_int[high,]
+counts_ts_int[high+1,]
+
+counts2 %>% 
+  mutate(same = lead(Count) == Count,
+         same2 = same == TRUE & lead(same) == TRUE) %>% 
+  arrange(desc(same2))
+
+counts2 %>% 
+  group_by(location, year(Count_Date)) %>% 
+  summarize(avg_daily = mean(Count*24))
+
+difference <- which(diff(counts2$Count) == 0)
+
+df <- counts2[difference,] %>% 
+  filter(Count != 1) %>% 
+  arrange(Count_Date)
+
+counts2 %>%
+  mutate(runlength = rle(Count))
+
+
+counts2 %>% 
+  mutate(nextvalue = diff(Count, 1)) %>% 
+  filter(nextvalue == 0 & Count > 0)
   
+counts2 %>% 
+  filter(Count_Date >= ymd("2019-07-02") & Count_Date <= ymd("2019-07-04")) %>% 
+  ggplot(aes(Count_Date, Count)) +
+  geom_col()
+
 #join hourly temperature to counts
 df <- counts2 %>% left_join(hourly_temp, by = c("Count_Date" = "date_time"))
 
@@ -141,6 +235,30 @@ counts %>%
   ggplot(aes(hour, sum, fill = location)) +
   geom_col(position = "dodge")
 
+counts2 %>%
+  filter(year(Count_Date) %in% c(2015:2018)) %>% 
+  filter(location != "Cap City at North Shore" | year(Count_Date) != 2015) %>% 
+  group_by(location, year(Count_Date)) %>%
+  summarize(sum = sum(Count)) %>%
+  ggplot(aes(x = `year(Count_Date)`, sum, fill = location)) +
+  geom_col(position = "dodge")
+
+counts2 %>%
+  mutate(hour = hour(Count_Date)) %>%
+  group_by(location, hour, weekendind) %>%
+  summarize(sum = sum(Count)) %>%
+  ggplot(aes(hour, sum, fill = location)) +
+  geom_col(position = "dodge") +
+  facet_wrap(~ weekendind)
+
+#counts per year
+counts2 %>%
+  mutate(year = year(Count_Date)) %>% 
+  group_by(location, year) %>%
+  summarize(sum = sum(Count)) %>%
+  ggplot(aes(year, sum, fill = location)) +
+  geom_col(position = "dodge")
+
 #count number by year and location
 #to do: either filter for only complete years or make it a riders/day metric
 counts %>%
@@ -149,3 +267,6 @@ counts %>%
   summarise(sum = n()) %>%
   ggplot(aes(year, sum, fill = location)) +
   geom_col(position = "dodge")
+
+
+
