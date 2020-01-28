@@ -2,7 +2,7 @@
 title: "Bike counts, temperature, and precipitation in Madison (Wis.)"
 subtitle: "Part 1: Bike count quality control"
 author: "Harald Kliems"
-date: "1/1/2020"
+date: "2020-01-26"
 output: html_document
 ---
 
