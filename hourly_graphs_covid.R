@@ -3,6 +3,7 @@ library(lubridate)
 library(readxl)
 library(RColorBrewer)
 library(gghighlight)
+library(hrbrthemes)
 
 ## create function for creating month intervals
 ## takes year and month as input and creates interval for that month, taking
@@ -14,22 +15,24 @@ create_interval_month <- function(y, m, tz){
   return(interval(start = start_date, end = end_date, tzone = tz))
 }
 
+
+
 #read Excel files with counter data
 x <- c("Count_Date", "Count")
 
-cc_counts <- read_csv("data/Eco-Totem_Capital_City_Trail_Bike_Counts_2020_07_06.csv",
+cc_counts <- read_csv("data/Eco-Totem_Capital_City_Trail_Bike_Counts_2022_01_06.csv",
                       skip = 1,
                       col_names = x,
                       col_types = "ci-") %>% 
   mutate(location = "Cap City at North Shore") %>% 
   mutate(Count_Date = mdy_hm(Count_Date, tz = "US/Central"))
 
-sw_counts <- read_csv("data/Eco-Totem_Southwest_Path_Bike_Counts_2020_07_06.csv", 
+sw_counts <- read_csv("data/Eco-Totem_Southwest_Path_Bike_Counts_2022_01_06.csv", 
                       skip = 1, 
                       col_names = x,
                       col_types = "ci-") %>% 
   mutate(location = "SW Path at Randall") %>% 
-  mutate(Count_Date = dmy_hms(Count_Date, tz = "US/Central"))
+  mutate(Count_Date = mdy_hm(Count_Date, tz = "US/Central"))
 
 counts <- bind_rows(cc_counts, sw_counts)
 
@@ -63,7 +66,11 @@ counts2 <- counts %>%
 #new interval for updated data: Two weeks up to 4/21
  int_20_0421 <- interval("2020-04-07", "2020-04-21")
 
+#interval for winter bike event
+ int_21_jan_feb <- interval("2021-01-02", "2021-02-28")
 
+
+ 
 # list of intervals for comparison with Streetlight data (compares May numbers)
 int_may_pre <- map(2016:2019, create_interval_month, m = 5, tz = "US/Central")
 int_may_post <- create_interval_month(2020, 5, "US/Central")
@@ -72,9 +79,35 @@ int_may_post <- create_interval_month(2020, 5, "US/Central")
 int_june_pre <- map(2016:2019, create_interval_month, m = 6, tz = "US/Central")
 int_june_post <- create_interval_month(2020, 6, "US/Central")
 
+# April
+int_apr_pre <- map(2016:2019, create_interval_month, m = 4, tz = "US/Central")
+int_apr_post <- create_interval_month(2020, 4, "US/Central")
+
+# hourly pattern comparison
+June_2019 <- create_interval_month(2019, 6, "US/Central")
+June_2020 <- create_interval_month(2020, 6, "US/Central")
+
+counts3 %>% 
+  filter(Count_Date %within% June_2020 | Count_Date %within% June_2019) %>% 
+  filter(weekendind == "weekday") %>% 
+  mutate(year = year(Count_Date), hour = hour(Count_Date)) %>% 
+  group_by(year, hour, location) %>% 
+  ggplot(aes(hour, Count)) +
+  geom_col() +
+  gghighlight(hour %in% c(7, 8, 16, 17)) +
+  facet_wrap(~location + year) +
+  labs(subtitle = "Hourly weekday bike counts June 2019 and 2020",
+       title = "Bike rush hour is gone",
+       caption = "Data: City of Madison, Eco Counter\n Viz: Harald Kliems for Madison Bikes",
+       fill = element_blank()) +
+  scale_x_continuous(name = "Time of day") +
+  scale_y_continuous(name = "bikes counted") +
+  theme_ft_rc() +
+  theme(panel.grid.minor.x = element_blank())
+
 #weekday hourly 
-p_weekday <- counts3 %>% 
-  filter(Count_Date %within% int_20_0421 & weekendind == "weekday") %>% 
+counts3 %>% 
+  filter(Count_Date %within% int_21_jan_feb & dayofweek == "Fri") %>% 
   group_by(location, hr = hour(Count_Date)) %>% 
   summarize(hourly = sum(Count)/n()) %>% 
   ggplot(aes(hr, hourly), fill = location) +
@@ -85,17 +118,18 @@ p_weekday <- counts3 %>%
   # geom_hline(yintercept = 25) +
   gghighlight(hourly > 30, use_group_by = FALSE) +
   facet_wrap(~location) +
-  labs(title = "How to avoid the WEEKDAY crowds",
-       subtitle = "Avoid the Cap City between 10 am and 8pm; avoid the SW Path between 1 and 7 pm",
+  labs(title = "Friday traffic Jan/Feb 2021",
+       #subtitle = "Avoid the Cap City between 10 am and 8pm; avoid the SW Path between 1 and 7 pm",
        caption = "Data: City of Madison, Eco Counter. Visualization: Harald Kliems for Madison Bikes",
        fill = element_blank()) +
   scale_y_continuous(name = "average number of cyclists/hour") +
-  theme(axis.ticks.x = element_blank())
+  theme(axis.ticks.x = element_blank()) +
+  theme_minimal()
 
 #ggsave(paste0("weekday_hourly_", Sys.Date(), ".png"), p_weekday, scale = 0.7, width = 16, height = 9, dpi = 300)
 
 p_weekend <- counts3 %>% 
-  filter(Count_Date %within% int_20_0421 & weekendind == "weekend") %>% 
+  filter(Count_Date %within% int_21_jan_feb & weekendind == "weekend") %>% 
   group_by(location, hr = hour(Count_Date)) %>% 
   summarize(hourly = sum(Count)/n()) %>% 
   ggplot(aes(hr, hourly), fill = location) +
@@ -133,29 +167,27 @@ counts3 %>%
    filter(Count_Date %within% list(int_16a, int_17a, int_18a, int_19a, int_20a)) %>% 
    mutate(prepost = ifelse(Count_Date %within% int_20a, "post", "pre"))
 
- #produce bar graph to compare May numbers for both locations
+ #produce bar graph to compare May to June numbers for both locations
+ options(scipen = 999)
 counts3 %>% 
    filter(Count_Date %within% int_may_post |
-            Count_Date %within% int_may_pre) %>% 
-   mutate(prepost =  ifelse(Count_Date %within% int_may_post, "post", "pre")) %>% 
-   group_by(prepost, year(Count_Date)) %>% 
-   summarise(avg_ct = sum(Count)/24) %>% 
-   ggplot(aes(`year(Count_Date)`, avg_ct, label = round(avg_ct,0))) +
-   geom_bar(position = "dodge", stat = "identity") +
-   geom_text(position = position_dodge(width = .9), vjust = -0.2) +
-  gghighlight(`year(Count_Date)` == 2020) +
-   labs(title = "Average May daily bike counts",
-        subtitle = "Counts in 2020 are 9% higher than in 2019 but lower than any year before that",
-        caption = "Data: City of Madison, Eco Counter. Visualization: Harald Kliems for Madison Bikes",
+            Count_Date %within% int_may_pre | 
+            Count_Date %within% int_apr_post |
+            Count_Date %within% int_june_post |
+            Count_Date %within% int_june_pre) %>% 
+   mutate(prepost =  ifelse(Count_Date %within% int_may_post | Count_Date %within% int_june_post | Count_Date %within% int_apr_post, "post", "pre")) %>% 
+   group_by(prepost, year = year(Count_Date), weekendind) %>%
+   summarise(total = sum(Count)) %>% 
+   ggplot(aes(year, total, label = round(total,0))) +
+  geom_area(aes(fill = weekendind), alpha = .8) +
+   labs(title = "Bike counts April to June",
+        subtitle = "2020 counts were at record highs, driven by weekend riding",
+        caption = "Data: City of Madison, Eco Counter\n Viz: Harald Kliems for Madison Bikes",
         fill = element_blank()) +
    scale_x_continuous(name = element_blank()) +
-   scale_y_continuous(name = "average number of cyclists/day") +
-  theme_minimal() +
-   theme(axis.ticks.x = element_blank(),
-         panel.grid.major.x = element_blank(),
-         panel.grid.minor.x = element_blank()) +
-   scale_fill_brewer(palette = "Set2")
- 
+   scale_y_continuous(name = "bikes counted") +
+  theme_modern_rc() +
+  theme(panel.grid.minor.x = element_blank())
  
  p <- counts5 %>% 
    group_by(prepost, year(Count_Date), weekendind) %>% 
